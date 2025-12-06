@@ -1,0 +1,313 @@
+#!/bin/bash
+# code-smells - Main entry point for the code smells detection toolkit
+# Auto-detects project languages and runs appropriate checks
+
+set -euo pipefail
+
+# Script directory (resolve symlinks)
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+
+# Source libraries
+source "$SCRIPT_DIR/lib/output.sh"
+source "$SCRIPT_DIR/lib/detect.sh"
+source "$SCRIPT_DIR/lib/file-length.sh"
+source "$SCRIPT_DIR/lib/elixir.sh"
+source "$SCRIPT_DIR/lib/dart.sh"
+source "$SCRIPT_DIR/lib/typescript.sh"
+source "$SCRIPT_DIR/lib/python.sh"
+source "$SCRIPT_DIR/lib/rust.sh"
+
+# Default thresholds
+FILE_WARN_ELIXIR=300
+FILE_ERROR_ELIXIR=500
+FUNC_WARN_ELIXIR=30
+FUNC_ERROR_ELIXIR=50
+NEST_WARN_ELIXIR=4
+NEST_ERROR_ELIXIR=6
+
+FILE_WARN_DART=400
+FILE_ERROR_DART=600
+FUNC_WARN_DART=40
+FUNC_ERROR_DART=70
+NEST_WARN_DART=4
+NEST_ERROR_DART=6
+
+FILE_WARN_TS=250
+FILE_ERROR_TS=400
+FUNC_WARN_TS=50
+FUNC_ERROR_TS=80
+NEST_WARN_TS=4
+NEST_ERROR_TS=6
+
+FILE_WARN_PYTHON=300
+FILE_ERROR_PYTHON=500
+FUNC_WARN_PYTHON=30
+FUNC_ERROR_PYTHON=50
+NEST_WARN_PYTHON=4
+NEST_ERROR_PYTHON=6
+
+FILE_WARN_RUST=400
+FILE_ERROR_RUST=600
+FUNC_WARN_RUST=40
+FUNC_ERROR_RUST=60
+NEST_WARN_RUST=4
+NEST_ERROR_RUST=6
+
+# Command line options
+CHECK_TYPE="all"  # all, file-length, functions, nesting
+LANGUAGES=""      # Empty = auto-detect
+PROJECT_DIR="."
+
+usage() {
+    cat << EOF
+Usage: code-smells [OPTIONS] [DIRECTORY]
+
+Auto-detect project languages and check for code smells.
+
+OPTIONS:
+    -h, --help              Show this help message
+    -c, --check TYPE        Check type: all, file-length, functions, nesting (default: all)
+    -l, --lang LANGUAGES    Comma-separated languages: elixir,dart,typescript,python,rust (default: auto-detect)
+    -f, --format FORMAT     Output format: text, json (default: text)
+
+    Threshold overrides (applies to all languages):
+    --file-warn N           File length warning threshold
+    --file-error N          File length error threshold
+    --func-warn N           Function length warning threshold
+    --func-error N          Function length error threshold
+    --nest-warn N           Nesting depth warning threshold
+    --nest-error N          Nesting depth error threshold
+
+EXAMPLES:
+    code-smells                           # Auto-detect in current directory
+    code-smells /path/to/project          # Analyze specific project
+    code-smells --check functions         # Only check function lengths
+    code-smells --lang elixir,dart        # Only check specific languages
+    code-smells --func-warn 25            # Custom function warning threshold
+    code-smells --format json             # Output as JSON
+
+EOF
+}
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -c|--check)
+            CHECK_TYPE="$2"
+            shift 2
+            ;;
+        -l|--lang)
+            LANGUAGES="$2"
+            shift 2
+            ;;
+        -f|--format)
+            OUTPUT_FORMAT="$2"
+            export OUTPUT_FORMAT
+            shift 2
+            ;;
+        --file-warn)
+            FILE_WARN_ELIXIR="$2"
+            FILE_WARN_DART="$2"
+            FILE_WARN_TS="$2"
+            FILE_WARN_PYTHON="$2"
+            FILE_WARN_RUST="$2"
+            shift 2
+            ;;
+        --file-error)
+            FILE_ERROR_ELIXIR="$2"
+            FILE_ERROR_DART="$2"
+            FILE_ERROR_TS="$2"
+            FILE_ERROR_PYTHON="$2"
+            FILE_ERROR_RUST="$2"
+            shift 2
+            ;;
+        --func-warn)
+            FUNC_WARN_ELIXIR="$2"
+            FUNC_WARN_DART="$2"
+            FUNC_WARN_TS="$2"
+            FUNC_WARN_PYTHON="$2"
+            FUNC_WARN_RUST="$2"
+            shift 2
+            ;;
+        --func-error)
+            FUNC_ERROR_ELIXIR="$2"
+            FUNC_ERROR_DART="$2"
+            FUNC_ERROR_TS="$2"
+            FUNC_ERROR_PYTHON="$2"
+            FUNC_ERROR_RUST="$2"
+            shift 2
+            ;;
+        --nest-warn)
+            NEST_WARN_ELIXIR="$2"
+            NEST_WARN_DART="$2"
+            NEST_WARN_TS="$2"
+            NEST_WARN_PYTHON="$2"
+            NEST_WARN_RUST="$2"
+            shift 2
+            ;;
+        --nest-error)
+            NEST_ERROR_ELIXIR="$2"
+            NEST_ERROR_DART="$2"
+            NEST_ERROR_TS="$2"
+            NEST_ERROR_PYTHON="$2"
+            NEST_ERROR_RUST="$2"
+            shift 2
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+        *)
+            PROJECT_DIR="$1"
+            shift
+            ;;
+    esac
+done
+
+# Resolve project directory to absolute path
+PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
+
+# Auto-detect languages if not specified
+if [[ -z "$LANGUAGES" ]]; then
+    detected=$(detect_nested_projects "$PROJECT_DIR")
+    if [[ -z "$detected" ]]; then
+        echo "No supported languages detected in $PROJECT_DIR" >&2
+        echo "Supported: elixir, dart, typescript, python, rust" >&2
+        exit 1
+    fi
+else
+    # Convert comma-separated to space-separated with dummy source dirs
+    detected=""
+    IFS=',' read -ra langs <<< "$LANGUAGES"
+    for lang in "${langs[@]}"; do
+        case "$lang" in
+            elixir) detected+=".:elixir:lib " ;;
+            dart) detected+=".:dart:lib " ;;
+            typescript) detected+=".:typescript:src " ;;
+            python) detected+=".:python:. " ;;
+            rust) detected+=".:rust:src " ;;
+            *) echo "Unknown language: $lang" >&2 ;;
+        esac
+    done
+fi
+
+# Get unique language names for display
+lang_names=$(get_language_names "$detected")
+
+# Print header
+print_report_header "$PROJECT_DIR" "$lang_names"
+
+# Run checks for each detected project/language
+for entry in $detected; do
+    # Parse entry: path:language:source_dir
+    IFS=':' read -r proj_path lang source_dir <<< "$entry"
+
+    # Build full source path
+    if [[ "$proj_path" == "." ]]; then
+        full_path="$PROJECT_DIR/$source_dir"
+        display_prefix=""
+    else
+        full_path="$PROJECT_DIR/$proj_path/$source_dir"
+        display_prefix="[$proj_path] "
+    fi
+
+    # Skip if directory doesn't exist
+    [[ ! -d "$full_path" ]] && continue
+
+    case "$lang" in
+        elixir)
+            if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "file-length" ]]; then
+                print_header "${display_prefix}FILE LENGTH (Elixir)"
+                check_file_length "$full_path" "ex exs" "$FILE_WARN_ELIXIR" "$FILE_ERROR_ELIXIR"
+            fi
+            if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "functions" ]]; then
+                print_header "${display_prefix}FUNCTION LENGTH (Elixir)"
+                check_elixir_functions "$full_path" "$FUNC_WARN_ELIXIR" "$FUNC_ERROR_ELIXIR"
+            fi
+            if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "nesting" ]]; then
+                print_header "${display_prefix}NESTING DEPTH (Elixir)"
+                check_elixir_nesting "$full_path" "$NEST_WARN_ELIXIR" "$NEST_ERROR_ELIXIR"
+            fi
+            ;;
+
+        dart)
+            if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "file-length" ]]; then
+                print_header "${display_prefix}FILE LENGTH (Dart)"
+                check_file_length "$full_path" "dart" "$FILE_WARN_DART" "$FILE_ERROR_DART"
+            fi
+            if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "functions" ]]; then
+                print_header "${display_prefix}METHOD LENGTH (Dart)"
+                check_dart_methods "$full_path" "$FUNC_WARN_DART" "$FUNC_ERROR_DART"
+            fi
+            if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "nesting" ]]; then
+                print_header "${display_prefix}NESTING DEPTH (Dart)"
+                check_dart_nesting "$full_path" "$NEST_WARN_DART" "$NEST_ERROR_DART"
+            fi
+            ;;
+
+        typescript)
+            if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "file-length" ]]; then
+                print_header "${display_prefix}FILE LENGTH (TypeScript)"
+                check_file_length "$full_path" "ts tsx" "$FILE_WARN_TS" "$FILE_ERROR_TS"
+            fi
+            if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "functions" ]]; then
+                print_header "${display_prefix}FUNCTION LENGTH (TypeScript)"
+                check_typescript_functions "$full_path" "$FUNC_WARN_TS" "$FUNC_ERROR_TS"
+            fi
+            if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "nesting" ]]; then
+                print_header "${display_prefix}NESTING DEPTH (TypeScript)"
+                check_typescript_nesting "$full_path" "$NEST_WARN_TS" "$NEST_ERROR_TS"
+            fi
+            ;;
+
+        python)
+            if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "file-length" ]]; then
+                print_header "${display_prefix}FILE LENGTH (Python)"
+                check_file_length "$full_path" "py" "$FILE_WARN_PYTHON" "$FILE_ERROR_PYTHON"
+            fi
+            if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "functions" ]]; then
+                print_header "${display_prefix}FUNCTION LENGTH (Python)"
+                check_python_functions "$full_path" "$FUNC_WARN_PYTHON" "$FUNC_ERROR_PYTHON"
+            fi
+            if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "nesting" ]]; then
+                print_header "${display_prefix}NESTING DEPTH (Python)"
+                check_python_nesting "$full_path" "$NEST_WARN_PYTHON" "$NEST_ERROR_PYTHON"
+            fi
+            ;;
+
+        rust)
+            if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "file-length" ]]; then
+                print_header "${display_prefix}FILE LENGTH (Rust)"
+                check_file_length "$full_path" "rs" "$FILE_WARN_RUST" "$FILE_ERROR_RUST"
+            fi
+            if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "functions" ]]; then
+                print_header "${display_prefix}FUNCTION LENGTH (Rust)"
+                check_rust_functions "$full_path" "$FUNC_WARN_RUST" "$FUNC_ERROR_RUST"
+            fi
+            if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "nesting" ]]; then
+                print_header "${display_prefix}NESTING DEPTH (Rust)"
+                check_rust_nesting "$full_path" "$NEST_WARN_RUST" "$NEST_ERROR_RUST"
+            fi
+            ;;
+    esac
+done
+
+# Print summary or JSON output
+if [[ "$OUTPUT_FORMAT" == "json" ]]; then
+    print_json_output "$PROJECT_DIR" "$lang_names"
+else
+    print_summary
+fi
+
+exit "$(get_exit_code)"
