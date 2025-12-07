@@ -1,6 +1,6 @@
 # code-smells
 
-A fast, portable command-line tool to detect code smells across multiple programming languages. No dependencies required - just bash and standard Unix tools.
+A fast command-line tool to detect code smells across multiple programming languages. Available as a single binary (Rust) or portable shell scripts.
 
 ## Features
 
@@ -10,27 +10,42 @@ A fast, portable command-line tool to detect code smells across multiple program
   - File length (too many lines per file)
   - Function/method length (functions that are too long)
   - Nesting depth (deeply nested code blocks)
-- **Portable**: Works on macOS and Linux with no external dependencies
+- **Portable**: Works on macOS and Linux
 - **Configurable**: Override thresholds via command-line arguments
 
 ## Installation
 
-### One-liner (recommended)
+### Pre-built binary (recommended)
+
+Downloads a single binary with no dependencies:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/byronsalty/code-smells/main/rust/install.sh | bash
+```
+
+### Shell script version
+
+If you prefer the bash/awk version (no compilation needed):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/byronsalty/code-smells/main/install.sh | bash
 ```
 
-### Manual installation
+### Build from source
+
+Requires [Rust](https://rustup.rs/):
 
 ```bash
-git clone https://github.com/byronsalty/code-smells.git ~/.local/bin/code-smells
-ln -s ~/.local/bin/code-smells/code-smells ~/.local/bin/csmells
+cargo install --git https://github.com/byronsalty/code-smells --path rust
 ```
 
 ### Uninstall
 
 ```bash
+# For binary version:
+curl -fsSL https://raw.githubusercontent.com/byronsalty/code-smells/main/rust/install.sh | bash -s -- --uninstall
+
+# For shell script version:
 curl -fsSL https://raw.githubusercontent.com/byronsalty/code-smells/main/install.sh | bash -s -- --uninstall
 ```
 
@@ -86,21 +101,19 @@ csmells --format json
 Project: /Users/dev/myproject
 Languages: elixir, typescript
 
---- FILE LENGTH (Elixir) ---
+--- ERRORS (3) ---
 ERROR  lib/myapp/large_module.ex (892 lines, limit: 500)
-WARN   lib/myapp/utils.ex (345 lines, limit: 300)
-
---- FUNCTION LENGTH (Elixir) ---
 ERROR  lib/myapp/large_module.ex:156 process_data (87 lines)
-WARN   lib/myapp/utils.ex:42 transform (35 lines)
+ERROR  src/api.ts:42 handleRequest (95 lines)
 
---- NESTING DEPTH (Elixir) ---
+--- WARNINGS (2) ---
+WARN   lib/myapp/utils.ex (345 lines, limit: 300)
 WARN   lib/myapp/large_module.ex:156 process_data (depth: 5)
 
 --- SUMMARY ---
 Files scanned: 24
-Errors: 2
-Warnings: 3
+Errors: 3
+Warnings: 2
 ```
 
 ## Language Detection
@@ -141,15 +154,9 @@ OPTIONS:
 - `1` - Warnings found (but no errors)
 - `2` - Errors found
 
-## Adding New Languages
+## Contributing
 
-To add support for a new language:
-
-1. Create `lib/newlang.sh` with these functions:
-   - `check_newlang_functions()` - Check function lengths
-   - `check_newlang_nesting()` - Check nesting depth
-2. Add the language to `lib/detect.sh`
-3. Add the language case to `code-smells` main script
+See [DEVELOPER.md](DEVELOPER.md) for build instructions, adding new languages, and release process.
 
 ## License
 

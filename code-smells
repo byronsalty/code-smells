@@ -75,6 +75,8 @@ OPTIONS:
     -c, --check TYPE        Check type: all, file-length, functions, nesting (default: all)
     -l, --lang LANGUAGES    Comma-separated languages: elixir,dart,typescript,python,rust (default: auto-detect)
     -f, --format FORMAT     Output format: text, json (default: text)
+    -e, --errors            Show only errors (no warnings)
+    -w, --warnings          Show only warnings (no errors)
 
     Threshold overrides (applies to all languages):
     --file-warn N           File length warning threshold
@@ -89,6 +91,8 @@ EXAMPLES:
     code-smells /path/to/project          # Analyze specific project
     code-smells --check functions         # Only check function lengths
     code-smells --lang elixir,dart        # Only check specific languages
+    code-smells --errors                  # Show only errors
+    code-smells --warnings                # Show only warnings
     code-smells --func-warn 25            # Custom function warning threshold
     code-smells --format json             # Output as JSON
 
@@ -114,6 +118,16 @@ while [[ $# -gt 0 ]]; do
             OUTPUT_FORMAT="$2"
             export OUTPUT_FORMAT
             shift 2
+            ;;
+        -e|--errors)
+            SEVERITY_FILTER="errors"
+            export SEVERITY_FILTER
+            shift
+            ;;
+        -w|--warnings)
+            SEVERITY_FILTER="warnings"
+            export SEVERITY_FILTER
+            shift
             ;;
         --file-warn)
             FILE_WARN_ELIXIR="$2"
@@ -228,75 +242,60 @@ for entry in $detected; do
     case "$lang" in
         elixir)
             if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "file-length" ]]; then
-                print_header "${display_prefix}FILE LENGTH (Elixir)"
                 check_file_length "$full_path" "ex exs" "$FILE_WARN_ELIXIR" "$FILE_ERROR_ELIXIR"
             fi
             if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "functions" ]]; then
-                print_header "${display_prefix}FUNCTION LENGTH (Elixir)"
                 check_elixir_functions "$full_path" "$FUNC_WARN_ELIXIR" "$FUNC_ERROR_ELIXIR"
             fi
             if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "nesting" ]]; then
-                print_header "${display_prefix}NESTING DEPTH (Elixir)"
                 check_elixir_nesting "$full_path" "$NEST_WARN_ELIXIR" "$NEST_ERROR_ELIXIR"
             fi
             ;;
 
         dart)
             if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "file-length" ]]; then
-                print_header "${display_prefix}FILE LENGTH (Dart)"
                 check_file_length "$full_path" "dart" "$FILE_WARN_DART" "$FILE_ERROR_DART"
             fi
             if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "functions" ]]; then
-                print_header "${display_prefix}METHOD LENGTH (Dart)"
                 check_dart_methods "$full_path" "$FUNC_WARN_DART" "$FUNC_ERROR_DART"
             fi
             if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "nesting" ]]; then
-                print_header "${display_prefix}NESTING DEPTH (Dart)"
                 check_dart_nesting "$full_path" "$NEST_WARN_DART" "$NEST_ERROR_DART"
             fi
             ;;
 
         typescript)
             if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "file-length" ]]; then
-                print_header "${display_prefix}FILE LENGTH (TypeScript)"
                 check_file_length "$full_path" "ts tsx" "$FILE_WARN_TS" "$FILE_ERROR_TS"
             fi
             if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "functions" ]]; then
-                print_header "${display_prefix}FUNCTION LENGTH (TypeScript)"
                 check_typescript_functions "$full_path" "$FUNC_WARN_TS" "$FUNC_ERROR_TS"
             fi
             if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "nesting" ]]; then
-                print_header "${display_prefix}NESTING DEPTH (TypeScript)"
                 check_typescript_nesting "$full_path" "$NEST_WARN_TS" "$NEST_ERROR_TS"
             fi
             ;;
 
         python)
             if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "file-length" ]]; then
-                print_header "${display_prefix}FILE LENGTH (Python)"
                 check_file_length "$full_path" "py" "$FILE_WARN_PYTHON" "$FILE_ERROR_PYTHON"
             fi
             if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "functions" ]]; then
-                print_header "${display_prefix}FUNCTION LENGTH (Python)"
                 check_python_functions "$full_path" "$FUNC_WARN_PYTHON" "$FUNC_ERROR_PYTHON"
             fi
             if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "nesting" ]]; then
-                print_header "${display_prefix}NESTING DEPTH (Python)"
                 check_python_nesting "$full_path" "$NEST_WARN_PYTHON" "$NEST_ERROR_PYTHON"
             fi
             ;;
 
         rust)
             if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "file-length" ]]; then
-                print_header "${display_prefix}FILE LENGTH (Rust)"
                 check_file_length "$full_path" "rs" "$FILE_WARN_RUST" "$FILE_ERROR_RUST"
             fi
             if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "functions" ]]; then
-                print_header "${display_prefix}FUNCTION LENGTH (Rust)"
                 check_rust_functions "$full_path" "$FUNC_WARN_RUST" "$FUNC_ERROR_RUST"
             fi
             if [[ "$CHECK_TYPE" == "all" || "$CHECK_TYPE" == "nesting" ]]; then
-                print_header "${display_prefix}NESTING DEPTH (Rust)"
                 check_rust_nesting "$full_path" "$NEST_WARN_RUST" "$NEST_ERROR_RUST"
             fi
             ;;

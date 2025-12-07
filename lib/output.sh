@@ -30,8 +30,22 @@ TOTAL_FILES=0
 # Output format (text or json)
 OUTPUT_FORMAT="${OUTPUT_FORMAT:-text}"
 
-# JSON output buffer
-JSON_ISSUES=()
+# Severity filter (all, errors, warnings)
+SEVERITY_FILTER="${SEVERITY_FILTER:-all}"
+
+# Temp files for buffered output (handles subshell issues)
+_OUTPUT_TMPDIR="${TMPDIR:-/tmp}"
+ERROR_BUFFER_FILE="$_OUTPUT_TMPDIR/csmells_errors_$$"
+WARNING_BUFFER_FILE="$_OUTPUT_TMPDIR/csmells_warnings_$$"
+JSON_BUFFER_FILE="$_OUTPUT_TMPDIR/csmells_json_$$"
+
+# Initialize/clear temp files
+: > "$ERROR_BUFFER_FILE"
+: > "$WARNING_BUFFER_FILE"
+: > "$JSON_BUFFER_FILE"
+
+# Cleanup on exit
+trap 'rm -f "$ERROR_BUFFER_FILE" "$WARNING_BUFFER_FILE" "$JSON_BUFFER_FILE"' EXIT
 
 # Print section header
 print_header() {
@@ -53,7 +67,7 @@ print_report_header() {
     fi
 }
 
-# Print an error (file too long, function too long, etc.)
+# Buffer an error (file too long, function too long, etc.)
 print_error() {
     local file="$1"
     local message="$2"
@@ -61,21 +75,20 @@ print_error() {
     local value="${4:-}"
     local limit="${5:-}"
 
-    ((TOTAL_ERRORS++))
-
     if [[ "$OUTPUT_FORMAT" == "text" ]]; then
-        echo -e "${RED}ERROR${NC}  $file $message"
+        # Buffer for grouped output (using file to handle subshells)
+        echo "$file $message" >> "$ERROR_BUFFER_FILE"
     else
         local json_entry="{\"severity\":\"error\",\"file\":\"$file\",\"message\":\"$message\""
         [[ -n "$check_type" ]] && json_entry+=",\"type\":\"$check_type\""
         [[ -n "$value" ]] && json_entry+=",\"value\":$value"
         [[ -n "$limit" ]] && json_entry+=",\"limit\":$limit"
         json_entry+="}"
-        JSON_ISSUES+=("$json_entry")
+        echo "$json_entry" >> "$JSON_BUFFER_FILE"
     fi
 }
 
-# Print a warning
+# Buffer a warning
 print_warning() {
     local file="$1"
     local message="$2"
@@ -83,33 +96,62 @@ print_warning() {
     local value="${4:-}"
     local limit="${5:-}"
 
-    ((TOTAL_WARNINGS++))
-
     if [[ "$OUTPUT_FORMAT" == "text" ]]; then
-        echo -e "${YELLOW}WARN${NC}   $file $message"
+        # Buffer for grouped output (using file to handle subshells)
+        echo "$file $message" >> "$WARNING_BUFFER_FILE"
     else
         local json_entry="{\"severity\":\"warning\",\"file\":\"$file\",\"message\":\"$message\""
         [[ -n "$check_type" ]] && json_entry+=",\"type\":\"$check_type\""
         [[ -n "$value" ]] && json_entry+=",\"value\":$value"
         [[ -n "$limit" ]] && json_entry+=",\"limit\":$limit"
         json_entry+="}"
-        JSON_ISSUES+=("$json_entry")
+        echo "$json_entry" >> "$JSON_BUFFER_FILE"
     fi
 }
 
-# Print summary
+# Print grouped issues and summary
 print_summary() {
     if [[ "$OUTPUT_FORMAT" == "text" ]]; then
+        local error_count=0
+        local warning_count=0
+
+        # Count issues
+        if [[ -s "$ERROR_BUFFER_FILE" ]]; then
+            error_count=$(wc -l < "$ERROR_BUFFER_FILE" | tr -d ' ')
+        fi
+        if [[ -s "$WARNING_BUFFER_FILE" ]]; then
+            warning_count=$(wc -l < "$WARNING_BUFFER_FILE" | tr -d ' ')
+        fi
+
+        # Print errors (if not filtering to warnings only)
+        if [[ "$SEVERITY_FILTER" != "warnings" ]] && [[ $error_count -gt 0 ]]; then
+            echo ""
+            echo -e "${BOLD}--- ERRORS ($error_count) ---${NC}"
+            while IFS= read -r entry; do
+                echo -e "${RED}ERROR${NC}  $entry"
+            done < "$ERROR_BUFFER_FILE"
+        fi
+
+        # Print warnings (if not filtering to errors only)
+        if [[ "$SEVERITY_FILTER" != "errors" ]] && [[ $warning_count -gt 0 ]]; then
+            echo ""
+            echo -e "${BOLD}--- WARNINGS ($warning_count) ---${NC}"
+            while IFS= read -r entry; do
+                echo -e "${YELLOW}WARN${NC}   $entry"
+            done < "$WARNING_BUFFER_FILE"
+        fi
+
+        # Print summary
         echo ""
         echo -e "${BOLD}--- SUMMARY ---${NC}"
         echo "Files scanned: $TOTAL_FILES"
-        if [[ $TOTAL_ERRORS -gt 0 ]]; then
-            echo -e "Errors: ${RED}$TOTAL_ERRORS${NC}"
+        if [[ $error_count -gt 0 ]]; then
+            echo -e "Errors: ${RED}$error_count${NC}"
         else
             echo -e "Errors: ${GREEN}0${NC}"
         fi
-        if [[ $TOTAL_WARNINGS -gt 0 ]]; then
-            echo -e "Warnings: ${YELLOW}$TOTAL_WARNINGS${NC}"
+        if [[ $warning_count -gt 0 ]]; then
+            echo -e "Warnings: ${YELLOW}$warning_count${NC}"
         else
             echo -e "Warnings: ${GREEN}0${NC}"
         fi
@@ -121,26 +163,35 @@ print_json_output() {
     local project="$1"
     local languages="$2"
 
+    local error_count=0
+    local warning_count=0
+    if [[ -s "$JSON_BUFFER_FILE" ]]; then
+        error_count=$(grep -c '"severity":"error"' "$JSON_BUFFER_FILE" 2>/dev/null || echo 0)
+        warning_count=$(grep -c '"severity":"warning"' "$JSON_BUFFER_FILE" 2>/dev/null || echo 0)
+    fi
+
     echo "{"
     echo "  \"project\": \"$project\","
     echo "  \"languages\": [$(echo "$languages" | sed 's/,/", "/g' | sed 's/^/"/' | sed 's/$/"/' )],"
     echo "  \"issues\": ["
 
     local first=true
-    for issue in "${JSON_ISSUES[@]}"; do
-        if [[ "$first" == "true" ]]; then
-            echo "    $issue"
-            first=false
-        else
-            echo "    ,$issue"
-        fi
-    done
+    if [[ -s "$JSON_BUFFER_FILE" ]]; then
+        while IFS= read -r issue; do
+            if [[ "$first" == "true" ]]; then
+                echo "    $issue"
+                first=false
+            else
+                echo "    ,$issue"
+            fi
+        done < "$JSON_BUFFER_FILE"
+    fi
 
     echo "  ],"
     echo "  \"summary\": {"
     echo "    \"files\": $TOTAL_FILES,"
-    echo "    \"errors\": $TOTAL_ERRORS,"
-    echo "    \"warnings\": $TOTAL_WARNINGS"
+    echo "    \"errors\": $error_count,"
+    echo "    \"warnings\": $warning_count"
     echo "  }"
     echo "}"
 }
@@ -153,17 +204,32 @@ increment_files() {
 
 # Reset counters (useful for testing)
 reset_counters() {
-    TOTAL_ERRORS=0
-    TOTAL_WARNINGS=0
     TOTAL_FILES=0
-    JSON_ISSUES=()
+    : > "$ERROR_BUFFER_FILE"
+    : > "$WARNING_BUFFER_FILE"
+    : > "$JSON_BUFFER_FILE"
 }
 
 # Get exit code based on errors/warnings
 get_exit_code() {
-    if [[ $TOTAL_ERRORS -gt 0 ]]; then
+    local error_count=0
+    local warning_count=0
+
+    if [[ -s "$ERROR_BUFFER_FILE" ]]; then
+        error_count=$(wc -l < "$ERROR_BUFFER_FILE" | tr -d ' ')
+    elif [[ -s "$JSON_BUFFER_FILE" ]]; then
+        error_count=$(grep -c '"severity":"error"' "$JSON_BUFFER_FILE" 2>/dev/null || echo 0)
+    fi
+
+    if [[ -s "$WARNING_BUFFER_FILE" ]]; then
+        warning_count=$(wc -l < "$WARNING_BUFFER_FILE" | tr -d ' ')
+    elif [[ -s "$JSON_BUFFER_FILE" ]]; then
+        warning_count=$(grep -c '"severity":"warning"' "$JSON_BUFFER_FILE" 2>/dev/null || echo 0)
+    fi
+
+    if [[ $error_count -gt 0 ]]; then
         echo 2
-    elif [[ $TOTAL_WARNINGS -gt 0 ]]; then
+    elif [[ $warning_count -gt 0 ]]; then
         echo 1
     else
         echo 0
